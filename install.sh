@@ -42,6 +42,10 @@ CORES="${CORES:-2}"
 BRIDGE="${BRIDGE:-vmbr0}"
 STORAGE="${STORAGE:-local-lvm}"
 TEMPLATE_STORAGE="${TEMPLATE_STORAGE:-local}"
+# Red del contenedor: dhcp | static. Si static, hay que dar IP_CIDR + GATEWAY.
+NET_MODE="${NET_MODE:-}"          # dhcp | static (si vacío y hay TTY, se pregunta)
+IP_CIDR="${IP_CIDR:-}"            # ej: 192.168.18.50/24  (modo static)
+GATEWAY="${GATEWAY:-}"           # ej: 192.168.18.1       (modo static)
 ISP_NAME="${ISP_NAME:-Demo ISP}"
 ISP_SLUG="${ISP_SLUG:-demo}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@demo.local}"
@@ -62,10 +66,12 @@ msg_err()  { echo -e " ${RD}✘${CL} $*" >&2; }
 line()     { echo -e "${BL}------------------------------------------------------------${CL}"; }
 
 CREATED_CTID=""
-cleanup_on_err() {
+SUCCESS=0
+# Trap en EXIT (no solo ERR) para limpiar también en fallos con `exit 1`
+# (p.ej. "no obtuvo IP") — antes esos casos dejaban el contenedor huérfano.
+cleanup_on_exit() {
   local code=$?
-  msg_err "Falló la instalación (exit $code)."
-  if [[ -n "$CREATED_CTID" ]]; then
+  if [[ "$SUCCESS" -ne 1 && -n "$CREATED_CTID" ]]; then
     msg_info "Limpiando el contenedor $CREATED_CTID que quedó a medias…"
     pct stop "$CREATED_CTID" &>/dev/null || true
     pct destroy "$CREATED_CTID" &>/dev/null || true
@@ -73,7 +79,7 @@ cleanup_on_err() {
   fi
   exit "$code"
 }
-trap cleanup_on_err ERR
+trap cleanup_on_exit EXIT
 
 # ── Pre-flight ───────────────────────────────────────────────────────────────
 line
@@ -110,6 +116,39 @@ msg_ok "Token válido."
 # CTID: siguiente libre si no vino.
 [[ -n "$CTID" ]] || CTID="$(pvesh get /cluster/nextid)"
 
+# ── Red del contenedor (DHCP o IP estática) ──────────────────────────────────
+# Muchas redes/bridges NO tienen servidor DHCP → el CT se quedaba sin IP. Se
+# pregunta el modo (o se pasa por env NET_MODE/IP_CIDR/GATEWAY).
+if [[ -z "$NET_MODE" ]]; then
+  if [[ -t 0 ]]; then
+    # Bridges disponibles como pista.
+    BRIDGES="$(ls /sys/class/net 2>/dev/null | grep -E '^vmbr[0-9]+' | tr '\n' ' ')"
+    echo -e " ${BL}Bridges disponibles:${CL} ${BRIDGES:-vmbr0}"
+    read -rp " $(echo -e "${YW}▶${CL}") Bridge de red [${BRIDGE}]: " _b; BRIDGE="${_b:-$BRIDGE}"
+    echo -e " $(echo -e "${YW}▶${CL}") ¿Cómo asigna IP el contenedor?"
+    echo "     1) DHCP (automático — necesita un servidor DHCP en ese bridge)"
+    echo "     2) IP estática (tú das IP y gateway)"
+    read -rp " $(echo -e "${YW}▶${CL}") Opción [1/2] (def 1): " _n
+    if [[ "$_n" == "2" ]]; then NET_MODE="static"; else NET_MODE="dhcp"; fi
+  else
+    NET_MODE="dhcp"
+  fi
+fi
+
+if [[ "$NET_MODE" == "static" ]]; then
+  if [[ -z "$IP_CIDR" && -t 0 ]]; then
+    read -rp " $(echo -e "${YW}▶${CL}") IP con máscara (ej 192.168.18.50/24): " IP_CIDR
+  fi
+  if [[ -z "$GATEWAY" && -t 0 ]]; then
+    read -rp " $(echo -e "${YW}▶${CL}") Gateway (ej 192.168.18.1): " GATEWAY
+  fi
+  [[ "$IP_CIDR" == */* ]] || { msg_err "IP estática inválida: usa formato IP/máscara, ej 192.168.18.50/24"; exit 1; }
+  [[ -n "$GATEWAY" ]]     || { msg_err "Falta el gateway para la IP estática."; exit 1; }
+  NET0="name=eth0,bridge=${BRIDGE},ip=${IP_CIDR},gw=${GATEWAY}"
+else
+  NET0="name=eth0,bridge=${BRIDGE},ip=dhcp"
+fi
+
 # ── Plantilla Debian 12 ──────────────────────────────────────────────────────
 msg_info "Buscando plantilla Debian 12…"
 TEMPLATE="$(pveam available --section system 2>/dev/null | awk '/debian-12-standard/{print $2}' | sort -V | tail -1)"
@@ -127,23 +166,33 @@ pct create "$CTID" "${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE}" \
   --hostname "$HOSTNAME_CT" \
   --cores "$CORES" --memory "$RAM_MB" --swap "$RAM_MB" \
   --rootfs "${STORAGE}:${DISK_GB}" \
-  --net0 "name=eth0,bridge=${BRIDGE},ip=dhcp" \
+  --net0 "$NET0" \
   --features "nesting=1,keyctl=1" \
   --unprivileged 1 --onboot 1 >/dev/null
 CREATED_CTID="$CTID"
 pct start "$CTID" >/dev/null
-msg_ok "Contenedor $CTID creado y arrancado."
+msg_ok "Contenedor $CTID creado y arrancado (red: ${NET_MODE})."
 
-# Esperar IP por DHCP
-msg_info "Esperando IP por DHCP…"
-IP=""
-for _ in $(seq 1 30); do
-  IP="$(pct exec "$CTID" -- bash -c "hostname -I 2>/dev/null | awk '{print \$1}'" 2>/dev/null || true)"
-  [[ -n "$IP" ]] && break
-  sleep 2
-done
-[[ -n "$IP" ]] || { msg_err "El contenedor no obtuvo IP (revisa el bridge $BRIDGE)."; exit 1; }
-msg_ok "IP del contenedor: $IP"
+# Resolver la IP del contenedor
+if [[ "$NET_MODE" == "static" ]]; then
+  IP="${IP_CIDR%/*}"
+  msg_ok "IP del contenedor (estática): $IP"
+else
+  msg_info "Esperando IP por DHCP…"
+  IP=""
+  for _ in $(seq 1 30); do
+    IP="$(pct exec "$CTID" -- bash -c "hostname -I 2>/dev/null | awk '{print \$1}'" 2>/dev/null || true)"
+    [[ -n "$IP" ]] && break
+    sleep 2
+  done
+  if [[ -z "$IP" ]]; then
+    msg_err "El contenedor no obtuvo IP por DHCP en el bridge ${BRIDGE}."
+    msg_err "Ese bridge no tiene servidor DHCP. Reintenta eligiendo IP ESTÁTICA,"
+    msg_err "o pásala por env:  NET_MODE=static IP_CIDR=192.168.X.Y/24 GATEWAY=192.168.X.1"
+    exit 1
+  fi
+  msg_ok "IP del contenedor: $IP"
+fi
 
 # ── Script de aprovisionamiento DENTRO del contenedor ────────────────────────
 # Se envía por stdin (no toca disco del host). El TOKEN llega por stdin como
@@ -223,7 +272,7 @@ pct exec "$CTID" -- rm -f /root/fibraos-provision.sh
 msg_ok "FibraOS aprovisionado."
 
 # ── Resumen ──────────────────────────────────────────────────────────────────
-trap - ERR
+SUCCESS=1   # a partir de aquí el EXIT trap NO borra el contenedor
 line
 msg_ok "FibraOS instalado en el contenedor ${CTID}."
 line
