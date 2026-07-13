@@ -9,7 +9,7 @@
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/maverick0309/fibraos-deploy/main/install.sh)"
 #
 # o descargando este archivo y ejecutándolo:
-#   FIBRAOS_TOKEN=github_pat_xxx ./fibraos-lxc.sh
+#   FIBRAOS_TOKEN=github_pat_xxx ./install.sh
 #
 # El código de FibraOS vive en un repo PRIVADO. Se descarga con un token de
 # GitHub de SOLO LECTURA (fine-grained PAT, scope: repo fibra-os, Contents:Read).
@@ -26,6 +26,11 @@
 #   ISP_NAME ISP_SLUG ADMIN_EMAIL ADMIN_PASSWORD ADMIN_NAME   datos del ISP demo
 # ==============================================================================
 set -Eeuo pipefail
+
+# Las herramientas de Proxmox (pct/pvesh/pveam) viven en /usr/sbin. Si se entró
+# con `su` (sin `-`), el PATH no incluye sbin y parecería "no es Proxmox".
+# Se añaden explícitamente para que funcione sin importar cómo se obtuvo root.
+export PATH="$PATH:/usr/sbin:/usr/local/sbin:/sbin"
 
 # ── Config (env con defaults) ────────────────────────────────────────────────
 REPO="${REPO:-maverick0309/fibra-os}"
