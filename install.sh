@@ -20,7 +20,7 @@
 #   REPO            repo privado (def: maverick0309/fibra-os)
 #   REF             rama/tag (def: main)
 #   CTID            id del contenedor (def: siguiente libre)
-#   HOSTNAME        nombre del CT (def: fibraos)
+#   CT_HOSTNAME     nombre del CT (def: FibraOS)
 #   DISK_GB RAM_MB CORES   recursos (def: 20 / 4096 / 2)
 #   BRIDGE STORAGE TEMPLATE_STORAGE   red/almacenamiento (def: vmbr0 / local-lvm / local)
 #   ISP_NAME ISP_SLUG ADMIN_EMAIL ADMIN_PASSWORD ADMIN_NAME   datos del ISP demo
@@ -35,7 +35,9 @@ export PATH="$PATH:/usr/sbin:/usr/local/sbin:/sbin"
 # ── Config (env con defaults) ────────────────────────────────────────────────
 REPO="${REPO:-maverick0309/fibra-os}"
 REF="${REF:-main}"
-HOSTNAME_CT="${HOSTNAME:-fibraos}"
+# OJO: no usar la variable `HOSTNAME` — bash ya la trae con el nombre del host
+# (p.ej. "pve") → el CT saldría llamándose "pve". Se usa CT_HOSTNAME.
+HOSTNAME_CT="${CT_HOSTNAME:-FibraOS}"
 DISK_GB="${DISK_GB:-20}"
 RAM_MB="${RAM_MB:-4096}"
 CORES="${CORES:-2}"
