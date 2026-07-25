@@ -108,6 +108,47 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/maverick0309/fibraos-dep
 
 ---
 
+---
+
+## Actualizar una instalación existente
+
+`update.sh` **solo actualiza** — no instala ni crea contenedores. Úsalo para
+llevar los cambios del código a un FibraOS que ya está funcionando.
+
+Dentro del contenedor, como root:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/maverick0309/fibraos-deploy/main/update.sh)"
+```
+
+Desde el host Proxmox, sin entrar al contenedor:
+
+```bash
+pct exec <CTID> -- bash -c "$(curl -fsSL https://raw.githubusercontent.com/maverick0309/fibraos-deploy/main/update.sh)"
+```
+
+**Qué hace, en orden:**
+1. Comprueba que exista la instalación (si no, te dice que uses `install.sh`).
+2. **Backup**: `pg_dump` de la base + copia de `.env` en `/opt/fibraos-backups/`
+   (conserva los últimos 5).
+3. Descarga el código nuevo con el mismo token de solo lectura.
+4. **Conserva `.env` intacto** y la base de datos.
+5. `docker compose up -d --build` y espera a que la API responda.
+6. **Si el arranque falla, restaura solo la versión anterior.**
+
+Si ya estás en la última versión, lo dice y no hace nada.
+
+> ⚠️ **Nunca regenera `.env`.** `SECRET_KEY` cifra las credenciales de las OLTs
+> guardadas: si cambiara, se perderían todas y habría que volver a introducirlas.
+
+| Flag / Variable | Para qué |
+|---|---|
+| `--dry-run` | Solo dice qué versión instalaría; no cambia nada. |
+| `--no-backup` | Omite el backup (desaconsejado). |
+| `REF=<rama\|tag>` | Instala una versión concreta (def: `main`). |
+| `FIBRAOS_TOKEN` | El mismo token RO; si no se pasa, lo pide por teclado. |
+| `APP_DIR` | Instalación a actualizar (def: `/opt/fibraos`). |
+
 ## Después: comandos útiles
 
 ```bash
