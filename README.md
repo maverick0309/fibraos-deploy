@@ -176,8 +176,21 @@ de ejemplo que podían insertar datos de demostración):
 
 1. **Actualiza** con `update.sh` — las versiones nuevas ya no traen esos scripts.
 2. Entra en la OLT → pestaña **Acciones** → **Eliminar OLT** (hay que escribir su
-   nombre exacto). Se borran también sus ONTs y su histórico; los clientes **no**
-   se borran, quedan sin ONT vinculada para poder reasignarlos.
+   nombre exacto). **Tú decides qué se va con ella:**
+
+   | | Se borra |
+   |---|---|
+   | Siempre | la OLT, sus ONTs y su histórico de señal, eventos y tráfico |
+   | ☐ opcional | sus **clientes** |
+   | ☐ opcional | sus **tickets / averías** |
+   | ☐ opcional | su **facturación** (facturas y pagos) |
+
+   Sin marcar nada, los clientes se conservan sin ONT vinculada. **La facturación
+   nunca se borra por defecto.** Y si pides borrar los clientes pero no la
+   facturación, los que tengan facturas **se conservan** (una factura no puede
+   quedarse sin dueño) y la app te dice cuántos fueron. El equipo del **inventario
+   nunca se borra**: solo se desvincula, porque sigue instalado físicamente.
+
 3. Si alguna no aparece en la lista pero sigue en la base (fila sin ISP asignado),
    ya no se consulta, pero para quitarla del todo:
    ```sql
@@ -188,6 +201,38 @@ de ejemplo que podían insertar datos de demostración):
 
 Una instalación nueva de FibraOS **arranca vacía**: 0 OLTs, 0 ONTs, 0 clientes.
 Solo se crean el ISP y el usuario admin que indica el instalador.
+
+### Comprobar si te quedaron restos de una OLT borrada
+
+Una consulta y sales de dudas (no modifica nada):
+
+```bash
+docker exec -it fibraos-db psql -U fibraos -d fibraos
+```
+```sql
+SELECT (SELECT count(*) FROM olts)                                  AS olts,
+       (SELECT count(*) FROM olts WHERE tenant_id IS NULL)          AS olts_sin_isp,
+       (SELECT count(*) FROM onts)                                  AS onts,
+       (SELECT count(*) FROM clients)                               AS clientes,
+       (SELECT count(*) FROM clients WHERE ont_id IS NULL)          AS clientes_sin_ont,
+       (SELECT count(*) FROM tickets WHERE ont_id IS NULL
+                                       AND client_id IS NULL)       AS tickets_huerfanos;
+```
+
+- `clientes_sin_ont` alto = clientes de una OLT que ya borraste. Para quitarlos:
+  ```sql
+  SELECT id, name, zone FROM clients WHERE ont_id IS NULL ORDER BY name;   -- míralos
+  DELETE FROM clients WHERE ont_id IS NULL
+                        AND id NOT IN (SELECT client_id FROM invoices);    -- sin facturación
+  ```
+- `tickets_huerfanos` alto = averías de equipos que ya no existen:
+  `DELETE FROM tickets WHERE ont_id IS NULL AND client_id IS NULL;`
+
+> Haz antes un backup: `update.sh` ya crea uno en `/opt/fibraos-backups/`.
+
+### Si borras una OLT y sigue apareciendo en el listado
+Ya no pasa (se corrigió el refresco de la lista). Con una versión anterior, recarga
+la página: **la OLT ya estaba borrada**, era la lista lo que no se refrescaba.
 
 ## Troubleshooting
 

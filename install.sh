@@ -26,8 +26,8 @@
 #   DISK_GB RAM_MB CORES   recursos (def: 20 / 4096 / 2)
 #   BRIDGE STORAGE TEMPLATE_STORAGE   red/almacenamiento (def: vmbr0 / local-lvm / local)
 #   NET_MODE        dhcp | static (si vacío y hay TTY, se pregunta)
-#   IP_CIDR         ej: 192.168.18.50/24  (solo modo static)
-#   GATEWAY         ej: 192.168.18.1      (solo modo static)
+#   IP_CIDR         ej: 192.168.1.50/24  (solo modo static)
+#   GATEWAY         ej: 192.168.1.1      (solo modo static)
 #   ISP_NAME ISP_SLUG ADMIN_EMAIL ADMIN_PASSWORD ADMIN_NAME   datos del ISP
 # ==============================================================================
 set -Eeuo pipefail
@@ -176,12 +176,12 @@ fi
 
 if [[ "$NET_MODE" == "static" ]]; then
   if [[ -z "$IP_CIDR" && -t 0 ]]; then
-    read -rp " $(echo -e "${YW}▶${CL}") IP con máscara (ej 192.168.18.50/24): " IP_CIDR
+    read -rp " $(echo -e "${YW}▶${CL}") IP con máscara (ej 192.168.1.50/24): " IP_CIDR
   fi
   if [[ -z "$GATEWAY" && -t 0 ]]; then
-    read -rp " $(echo -e "${YW}▶${CL}") Gateway (ej 192.168.18.1): " GATEWAY
+    read -rp " $(echo -e "${YW}▶${CL}") Gateway (ej 192.168.1.1): " GATEWAY
   fi
-  [[ "$IP_CIDR" == */* ]] || { msg_err "IP estática inválida: usa formato IP/máscara, ej 192.168.18.50/24"; exit 1; }
+  [[ "$IP_CIDR" == */* ]] || { msg_err "IP estática inválida: usa formato IP/máscara, ej 192.168.1.50/24"; exit 1; }
   [[ -n "$GATEWAY" ]]     || { msg_err "Falta el gateway para la IP estática."; exit 1; }
   NET0="name=eth0,bridge=${BRIDGE},ip=${IP_CIDR},gw=${GATEWAY}"
 else
