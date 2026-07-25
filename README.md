@@ -167,6 +167,28 @@ pct stop <CTID>; pct destroy <CTID>
 
 ---
 
+---
+
+## OLTs que no reconoces en tu panel
+
+Si ves OLTs que no configuraste (las versiones antiguas de FibraOS traían scripts
+de ejemplo que podían insertar datos de demostración):
+
+1. **Actualiza** con `update.sh` — las versiones nuevas ya no traen esos scripts.
+2. Entra en la OLT → pestaña **Acciones** → **Eliminar OLT** (hay que escribir su
+   nombre exacto). Se borran también sus ONTs y su histórico; los clientes **no**
+   se borran, quedan sin ONT vinculada para poder reasignarlos.
+3. Si alguna no aparece en la lista pero sigue en la base (fila sin ISP asignado),
+   ya no se consulta, pero para quitarla del todo:
+   ```sql
+   SELECT id, name, host FROM olts WHERE tenant_id IS NULL;
+   DELETE FROM onts WHERE olt_id IN (SELECT id FROM olts WHERE tenant_id IS NULL);
+   DELETE FROM olts WHERE tenant_id IS NULL;
+   ```
+
+Una instalación nueva de FibraOS **arranca vacía**: 0 OLTs, 0 ONTs, 0 clientes.
+Solo se crean el ISP y el usuario admin que indica el instalador.
+
 ## Troubleshooting
 
 | Síntoma | Causa / arreglo |
