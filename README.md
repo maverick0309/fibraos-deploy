@@ -230,6 +230,31 @@ SELECT (SELECT count(*) FROM olts)                                  AS olts,
 
 > Haz antes un backup: `update.sh` ya crea uno en `/opt/fibraos-backups/`.
 
+---
+
+## Mi OLT solo funciona por Telnet (o SSH no conecta)
+
+Normal, sobre todo en **ZTE**: los dos protocolos son **excluyentes**.
+
+| Comando en la OLT | Efecto |
+|---|---|
+| `ssh server only` | deja **solo SSH** (Telnet desactivado) |
+| `no ssh server only` | deja **solo Telnet** (SSH desactivado) |
+
+De fábrica muchas ZTE vienen en modo Telnet. FibraOS **usa el protocolo que elijas** y
+nunca lo cambia solo: entra en la OLT → **Configuración** → *Protocolo principal* →
+`Telnet`, y guarda.
+
+- Pulsa **Probar conexión**: te dice qué puertos están abiertos (`SSH :22 · Telnet :23`)
+  y qué protocolo deberías usar. No hace falta que entres a la OLT a mirarlo.
+- ⚠️ **Telnet no cifra**: usuario y contraseña viajan en claro. Úsalo solo dentro de tu
+  LAN de gestión o de una VPN, nunca expuesto a internet.
+- En una ZTE C320 real, Telnet resultó **~3× más rápido** que SSH leyendo las mismas
+  ONUs (21 s frente a 63 s): la negociación SSH con cifrado legacy es cara para la
+  tarjeta de control de la OLT.
+
+---
+
 ### Si borras una OLT y sigue apareciendo en el listado
 Ya no pasa (se corrigió el refresco de la lista). Con una versión anterior, recarga
 la página: **la OLT ya estaba borrada**, era la lista lo que no se refrescaba.
