@@ -138,6 +138,20 @@ pct exec <CTID> -- bash -c "$(curl -fsSL https://raw.githubusercontent.com/maver
 
 Si ya estás en la última versión, lo dice y no hace nada.
 
+### Qué trae cada versión
+
+Tras actualizar, dentro del contenedor tienes **`/opt/fibraos/CHANGELOG.md`**: qué se
+arregló, qué cambia de comportamiento y **qué te conviene ajustar en tus OLTs** (ACLs de
+gestión, communities, límite de sesiones del usuario). Está escrito para el ISP, no para
+el que programa.
+
+```bash
+pct exec <CTID> -- cat /opt/fibraos/CHANGELOG.md | head -60
+```
+
+Y si vas a mirar el código, `/opt/fibraos/docs/COMUNICACION-CON-LAS-OLT.md` explica cómo
+FibraOS habla con los equipos: qué pide por SNMP, qué por CLI, y por qué.
+
 > ⚠️ **Nunca regenera `.env`.** `SECRET_KEY` cifra las credenciales de las OLTs
 > guardadas: si cambiara, se perderían todas y habría que volver a introducirlas.
 
