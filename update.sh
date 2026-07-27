@@ -129,6 +129,15 @@ echo
 
 if [[ "$CUR_VER" == "$NEW_SHORT" ]]; then
   msg_ok "Ya estás en la última versión (${NEW_SHORT}). No hay nada que hacer."
+  # Y aun así se dice dónde leer los cambios. `NOVEDADES.md` lo escribe una
+  # actualización, así que quien ya está al día no lo tiene todavía y se queda sin
+  # saber a dónde mirar — que es exactamente el callejón sin salida que se llevó un
+  # ISP al buscar un fichero que su instalación no había creado nunca.
+  if [[ -f "$APP_DIR/NOVEDADES.md" ]]; then
+    echo -e "  ${BL}Novedades:${CL}   $APP_DIR/NOVEDADES.md   (de la última actualización)"
+  fi
+  [[ -f "$APP_DIR/CHANGELOG.md" ]] && \
+    echo -e "  ${BL}Historial:${CL}   $APP_DIR/CHANGELOG.md   (qué cambió en cada versión)"
   trap - ERR; exit 0
 fi
 if [[ "$DRY_RUN" -eq 1 ]]; then
