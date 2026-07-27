@@ -173,6 +173,40 @@ rm -f "/tmp/fibraos-$$.tgz"
 unset FIBRAOS_TOKEN
 [[ -f "$NEW_DIR/$COMPOSE_FILE" ]] || { msg_err "El tarball no trae $COMPOSE_FILE — abortando."; exit 1; }
 
+# ── 4b. ¿Qué trae esta actualización? ────────────────────────────────────────
+#
+# El registro de cambios viajaba en el tarball desde siempre, pero **nadie apuntaba a
+# él**: el actualizador decía "14551cd0 → ea325f04" y ya está. Un ISP no tiene forma de
+# saber qué se arregló ni qué debería probar, y el repositorio es privado, así que
+# tampoco puede mirarlo en la web.
+#
+# Se extraen solo las secciones NUEVAS: las que están en el CHANGELOG que se acaba de
+# descargar y no en el que ya tenía instalado. Así lo que se lee es exactamente lo que
+# cambia para él, no el historial entero.
+#
+# Se calcula AQUÍ porque es el único momento en que existen las dos versiones del
+# fichero a la vez: después del intercambio, la vieja ya no está en su sitio.
+NOVEDADES_TMP="/tmp/fibraos-novedades-$$.md"
+
+_extraer_novedades() {   # $1 = CHANGELOG instalado, $2 = CHANGELOG nuevo
+  [[ -f "$2" ]] || return 1
+  if [[ ! -f "$1" ]]; then
+    # Instalación anterior al registro de cambios: se enseña solo la última entrada,
+    # que es lo útil. Volcar el historial completo sería ruido.
+    awk '/^## /{n++} n==1' "$2"
+    return 0
+  fi
+  # Se recorre el nuevo desde arriba y se corta en la primera sección que ya conocía.
+  awk -v instalado="$1" '
+    BEGIN { while ((getline l < instalado) > 0) if (l ~ /^## /) conocida[l] = 1 }
+    /^## / && ($0 in conocida) { exit }
+    /^## / { dentro = 1 }
+    dentro { print }
+  ' "$2"
+}
+
+_extraer_novedades "$APP_DIR/CHANGELOG.md" "$NEW_DIR/CHANGELOG.md" > "$NOVEDADES_TMP" 2>/dev/null || true
+
 # ── 5. Conservar configuración y datos locales ───────────────────────────────
 # .env es lo único imprescindible (SECRET_KEY + password BD). Nunca se regenera.
 cp "$APP_DIR/.env" "$NEW_DIR/.env"
@@ -212,8 +246,40 @@ trap - ERR
 line
 msg_ok "FibraOS actualizado: ${CUR_VER}  →  ${NEW_SHORT}"
 line
-echo -e "  ${BL}Datos:${CL}   intactos (volumen postgres_data)"
-echo -e "  ${BL}Config:${CL}  $APP_DIR/.env sin cambios (misma SECRET_KEY)"
-[[ -n "$BACKUP_DIR" ]] && echo -e "  ${BL}Backup:${CL}  $BACKUP_DIR"
-echo -e "  ${BL}Logs:${CL}    docker compose -f $APP_DIR/$COMPOSE_FILE logs -f api"
+
+# ── 8. Qué ha cambiado ───────────────────────────────────────────────────────
+# Se guarda SIEMPRE en un sitio fijo, y en la terminal se enseña un resumen: las
+# entradas largas no caben en pantalla y lo que importa es que sepa dónde está el texto
+# completo para leerlo con calma y probar lo que le afecte.
+NOVEDADES_FILE="$APP_DIR/NOVEDADES.md"
+if [[ -s "$NOVEDADES_TMP" ]]; then
+  {
+    echo "# Novedades de esta actualización"
+    echo
+    echo "Instalado el $(date '+%Y-%m-%d %H:%M') · versión ${CUR_VER} → ${NEW_SHORT}"
+    echo
+    cat "$NOVEDADES_TMP"
+  } > "$NOVEDADES_FILE"
+
+  TOTAL=$(wc -l < "$NOVEDADES_TMP")
+  echo -e "  ${BL}Qué ha cambiado:${CL}"
+  echo
+  sed -n '1,40p' "$NOVEDADES_TMP" | sed 's/^/  /'
+  if [[ "$TOTAL" -gt 40 ]]; then
+    echo
+    echo -e "  ${YW}… $((TOTAL - 40)) líneas más.${CL}"
+  fi
+  echo
+  line
+  echo -e "  ${BL}Novedades:${CL}   $NOVEDADES_FILE   ${GN}← qué se corrigió y qué probar${CL}"
+else
+  echo -e "  ${BL}Novedades:${CL}   (esta versión no trae entrada en el registro de cambios)"
+fi
+echo -e "  ${BL}Historial:${CL}   $APP_DIR/CHANGELOG.md   (todas las versiones)"
+rm -f "$NOVEDADES_TMP"
+
+echo -e "  ${BL}Datos:${CL}       intactos (volumen postgres_data)"
+echo -e "  ${BL}Config:${CL}      $APP_DIR/.env sin cambios (misma SECRET_KEY)"
+[[ -n "$BACKUP_DIR" ]] && echo -e "  ${BL}Backup:${CL}      $BACKUP_DIR"
+echo -e "  ${BL}Logs:${CL}        docker compose -f $APP_DIR/$COMPOSE_FILE logs -f api"
 line
