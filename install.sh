@@ -161,7 +161,14 @@ msg_ok "Token válido."
 # ── Red del contenedor ────────────────────────────────────────────────────────
 if [[ -z "$NET_MODE" ]]; then
   if [[ -t 0 ]]; then
-    BRIDGES="$(ls /sys/class/net 2>/dev/null | grep -E '^vmbr[0-9]+' | tr '\n' ' ')"
+    # Glob en vez de `ls | grep`: `ls` puede partir nombres raros y su salida no es
+    # un formato estable. Aquí además evita depender de que `grep` exista en el host
+    # Proxmox donde se ejecuta el instalador.
+    BRIDGES=""
+    for _br in /sys/class/net/vmbr[0-9]*; do
+      [[ -e "$_br" ]] || continue
+      BRIDGES+="${_br##*/} "
+    done
     echo -e " ${BL}Bridges disponibles:${CL} ${BRIDGES:-vmbr0}"
     read -rp " $(echo -e "${YW}▶${CL}") Bridge de red [${BRIDGE}]: " _b; BRIDGE="${_b:-$BRIDGE}"
     echo -e " $(echo -e "${YW}▶${CL}") ¿Cómo asigna IP el contenedor?"
