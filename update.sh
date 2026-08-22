@@ -17,7 +17,11 @@
 #   - La base de datos (volumen docker postgres_data).
 #
 # Variables opcionales:
-#   FIBRAOS_TOKEN   token GitHub RO (si no, se pide por prompt)
+#   FIBRAOS_TOKEN   token GitHub RO. Si no está en el entorno se lee de
+#                   /root/.fibraos-token (si existe) y, si tampoco, se pide por teclado.
+#                   Este script NUNCA escribe ese fichero: el token es tuyo y guardarlo
+#                   en el disco de tu servidor lo decides tú, no el actualizador.
+#   TOKEN_FILE      dónde buscar ese fichero (def: /root/.fibraos-token)
 #   REPO            repo privado (def: maverick0309/fibra-os)
 #   REF             rama/tag/commit a instalar (def: main)
 #   APP_DIR         instalación a actualizar (def: /opt/fibraos)
@@ -43,7 +47,7 @@ for arg in "$@"; do
   case "$arg" in
     --dry-run)   DRY_RUN=1 ;;
     --no-backup) DO_BACKUP=0 ;;
-    -h|--help)   sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help)   sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "Opción desconocida: $arg (usa --help)"; exit 1 ;;
   esac
 done
@@ -101,25 +105,116 @@ docker compose version >/dev/null 2>&1 || { msg_err "Falta el plugin 'docker com
 command -v curl >/dev/null || { msg_err "Falta curl."; exit 1; }
 msg_ok "Instalación encontrada en $APP_DIR"
 
-# Token
+# ── Token de GitHub ──────────────────────────────────────────────────────────
+#
+# Orden: variable de entorno → fichero → teclado.
+#
+# El fichero NO lo escribe este script. Teclear el token en cada actualización es lo
+# que produce el pegado a medias, y un pegado a medias da un 401 que parece una avería
+# del producto; pero guardar solo una credencial en el disco de otra persona no es una
+# decisión que le toque tomar a un actualizador. Si quieres dejar de teclearlo:
+#
+#     install -m 600 /dev/null /root/.fibraos-token
+#     printf '%s' 'TU_TOKEN' > /root/.fibraos-token
+TOKEN_FILE="${TOKEN_FILE:-/root/.fibraos-token}"
+TOKEN_ORIGEN="la variable FIBRAOS_TOKEN"
+if [[ -z "$FIBRAOS_TOKEN" && -r "$TOKEN_FILE" ]]; then
+  FIBRAOS_TOKEN="$(head -1 "$TOKEN_FILE")"
+  TOKEN_ORIGEN="$TOKEN_FILE"
+  TOKEN_PERM="$(stat -c '%a' "$TOKEN_FILE" 2>/dev/null || echo '?')"
+  if [[ "$TOKEN_PERM" != "600" && "$TOKEN_PERM" != "400" ]]; then
+    msg_err "AVISO: $TOKEN_FILE tiene permisos $TOKEN_PERM — cualquier usuario del servidor"
+    msg_err "       puede leer tu token. Arréglalo con:  chmod 600 $TOKEN_FILE"
+  fi
+fi
 if [[ -z "$FIBRAOS_TOKEN" && -t 0 ]]; then
+  msg_info "Pégalo ENTERO y de una sola vez: un token a medias da un error 401 que parece"
+  msg_info "una avería del producto. Para no teclearlo cada vez, ver $TOKEN_FILE en --help."
   read -rsp " $(echo -e "${YW}▶${CL}") Pega el token GitHub de SOLO LECTURA (no se mostrará): " FIBRAOS_TOKEN
   echo
+  TOKEN_ORIGEN="lo que se tecleó ahora"
 fi
+# Un pegado desde un correo o desde el móvil arrastra espacios y saltos de línea. GitHub
+# responde 401 sin decir por qué, así que se limpian antes de preguntarle nada.
+FIBRAOS_TOKEN="${FIBRAOS_TOKEN//[$' \t\r\n']/}"
 [[ -n "$FIBRAOS_TOKEN" ]] || { msg_err "Falta FIBRAOS_TOKEN (token GitHub RO)."; exit 1; }
+
+# ── Hablar con GitHub diciendo qué pasa cuando no se puede ────────────────────
+#
+# `curl -fsSL` con un token caducado escupe «curl: (22) ... error: 401» y el script
+# terminaba con «La actualización falló (exit 22)»: ni una palabra sobre el token. El
+# ISP se queda mirando su servidor buscando una avería que no existe. Por eso aquí se
+# pide SIN -f, se mira el código HTTP y se explica en palabras.
+
+# Deja el cuerpo en $2 y devuelve el código HTTP por stdout (000 = no hubo respuesta).
+_gh_get() {   # $1 = URL, $2 = fichero de salida
+  local code=""
+  # Ojo: cuando curl falla del todo YA imprime «000» por el -w, así que un
+  # `|| echo 000` de más devolvía «000000» y el mensaje salía como código raro.
+  code="$(curl -sSL -o "$2" -w '%{http_code}' \
+               -H "Authorization: Bearer ${FIBRAOS_TOKEN}" \
+               -H "Accept: application/vnd.github+json" \
+               "$1" 2>/dev/null)" || true
+  printf '%s' "${code:-000}"
+}
+
+_fallo_github() {   # $1 = código HTTP, $2 = qué se estaba haciendo
+  local code="$1" que="$2"
+  case "$code" in
+    401)
+      msg_err "GitHub rechazó el token (HTTP 401) al $que."
+      msg_err "El token NO es válido. Casi siempre es una de estas tres:"
+      msg_err "   1. caducó — los tokens de GitHub llevan fecha de caducidad;"
+      msg_err "   2. se pegó a medias — tiene que ir entero, sin espacios ni saltos;"
+      msg_err "   3. se revocó."
+      msg_err "Pide uno nuevo a quien te da soporte y vuelve a lanzar esto mismo."
+      ;;
+    403)
+      msg_err "GitHub aceptó el token pero no deja $que (HTTP 403)."
+      msg_err "El token existe pero le falta permiso, o se agotó el límite de llamadas."
+      msg_err "Necesita permiso de lectura de contenido (Contents: Read) sobre ${REPO}."
+      ;;
+    404)
+      msg_err "GitHub no encuentra ${REPO}@${REF} con ese token (HTTP 404) al $que."
+      msg_err "En un repositorio privado, un token sin acceso da 404, no 403: es el mismo"
+      msg_err "síntoma que si no existiera. Comprueba que el token es de ESTE producto."
+      ;;
+    000)
+      msg_err "No hubo respuesta de GitHub al $que."
+      msg_err "Es tu salida a internet: DNS, cortafuegos o proxy. Compruébalo con:"
+      msg_err "   curl -sI https://api.github.com"
+      ;;
+    *)
+      msg_err "GitHub respondió HTTP $code al $que — no esperado."
+      ;;
+  esac
+  case "$code" in
+    401|403|404)
+      msg_err "Token usado: ${#FIBRAOS_TOKEN} caracteres, de ${TOKEN_ORIGEN}."
+      msg_err "(los de GitHub tienen 40 o más; si salen menos, se pegó incompleto)"
+      ;;
+  esac
+  msg_err "Tu instalación NO se ha tocado: sigue funcionando la versión que tenías."
+}
 
 # ── 2. Qué versión hay y cuál se instalaría ──────────────────────────────────
 CUR_VER="$(cat "$APP_DIR/.fibraos-version" 2>/dev/null || echo "desconocida (instalación previa al versionado)")"
 msg_info "Consultando ${REPO}@${REF}…"
 # Se captura la respuesta ENTERA antes de extraer: si se hace `curl | grep -m1`,
 # grep cierra la tubería al primer match y curl muere con "error 23" (SIGPIPE).
-API_JSON="$(curl -fsSL -H "Authorization: Bearer ${FIBRAOS_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${REPO}/commits/${REF}")" || API_JSON=""
+API_TMP="/tmp/fibraos-api-$$.json"
+HTTP_CODE="$(_gh_get "https://api.github.com/repos/${REPO}/commits/${REF}" "$API_TMP")"
+if [[ "$HTTP_CODE" != "200" ]]; then
+  _fallo_github "$HTTP_CODE" "consultar qué versión hay disponible"
+  rm -f "$API_TMP"
+  trap - ERR; exit 1
+fi
+API_JSON="$(cat "$API_TMP")"; rm -f "$API_TMP"
 NEW_SHA="$(printf '%s\n' "$API_JSON" \
            | sed -n 's/^[[:space:]]*"sha"[[:space:]]*:[[:space:]]*"\([a-f0-9]\{7,\}\)".*/\1/p' \
            | sed -n '1p')"
-[[ -n "$NEW_SHA" ]] || { msg_err "No pude leer ${REPO}@${REF} con ese token (¿permisos Contents:Read?)."; exit 1; }
+# 200 pero sin sha: la respuesta no es la que se espera (¿un proxy que devuelve HTML?).
+[[ -n "$NEW_SHA" ]] || { msg_err "GitHub contestó correctamente pero sin decir la versión de ${REPO}@${REF}."; msg_err "Tu instalación NO se ha tocado."; trap - ERR; exit 1; }
 NEW_SHORT="${NEW_SHA:0:8}"
 
 echo
@@ -174,9 +269,15 @@ fi
 NEW_DIR="${APP_DIR}.new.$$"
 mkdir -p "$NEW_DIR"
 msg_info "Descargando código ${NEW_SHORT}…"
-curl -fsSL -H "Authorization: Bearer ${FIBRAOS_TOKEN}" \
-     -H "Accept: application/vnd.github+json" \
-     "https://api.github.com/repos/${REPO}/tarball/${REF}" -o "/tmp/fibraos-$$.tgz"
+# Sin `-f` y mirando el código: si el token caducó ENTRE la consulta de arriba y esta
+# descarga —o si tiene permiso para ver el repositorio pero no para bajarlo—, lo que
+# veía el ISP era «exit 22» y ninguna pista de que el problema fuese su token.
+HTTP_CODE="$(_gh_get "https://api.github.com/repos/${REPO}/tarball/${REF}" "/tmp/fibraos-$$.tgz")"
+if [[ "$HTTP_CODE" != "200" ]]; then
+  _fallo_github "$HTTP_CODE" "descargar el código"
+  rm -f "/tmp/fibraos-$$.tgz"; rm -rf "$NEW_DIR"; NEW_DIR=""
+  trap - ERR; exit 1
+fi
 tar xzf "/tmp/fibraos-$$.tgz" -C "$NEW_DIR" --strip-components=1
 rm -f "/tmp/fibraos-$$.tgz"
 unset FIBRAOS_TOKEN
