@@ -128,15 +128,29 @@ pct exec <CTID> -- bash -c "$(curl -fsSL https://raw.githubusercontent.com/maver
 ```
 
 **Qué hace, en orden:**
-1. Comprueba que exista la instalación (si no, te dice que uses `install.sh`).
-2. **Backup**: `pg_dump` de la base + copia de `.env` en `/opt/fibraos-backups/`
-   (conserva los últimos 5).
-3. Descarga el código nuevo con el mismo token de solo lectura.
-4. **Conserva `.env` intacto** y la base de datos.
-5. `docker compose up -d --build` y espera a que la API responda.
-6. **Si el arranque falla, restaura solo la versión anterior.**
+1. Comprueba que exista la instalación (si no, te dice que uses `install.sh`) y que tu
+   **Docker Compose** sea la 2.0.1 o más nueva (si no, para sin tocar nada).
+2. Asegura **`.env.traps`**: lo crea si falta, o le añade **solo** la variable que le
+   falte. Una `TRAPS_KEY` que ya existe no se toca nunca. Lo hace también si ya estás en
+   la última versión (y entonces recrea la API para que lo lea).
+3. **Backup**: `pg_dump` de la base + copia de `.env` y `.env.traps` en
+   `/opt/fibraos-backups/` (conserva los últimos 5).
+4. Descarga el código nuevo con el mismo token de solo lectura.
+5. **Conserva `.env` y `.env.traps` intactos** y la base de datos.
+6. Comprueba que tu Docker Compose carga el fichero de la versión nueva; si no, para
+   **sin haber cambiado nada**.
+7. `docker compose up -d --build` y espera a que la API responda.
+8. **Si el arranque falla:** si la base no llegó a migrarse, vuelve al código anterior y
+   **comprueba** que la API responde. Si la base ya se migró, el código anterior no
+   arrancaría contra ella: se queda la versión nueva, te dice cómo ver por qué falla y te
+   da los comandos para volver atrás a mano (restaurar la base borra lo escrito desde el
+   backup; eso lo decides tú).
 
-Si ya estás en la última versión, lo dice y no hace nada.
+Si ya estás en la última versión, lo dice y solo completa `.env.traps` si le faltaba algo.
+
+> ⚠️ La primera actualización con el receptor de avisos **reinicia una vez el contenedor
+> de la base** (entra en su red propia). `update.sh` lo avisa justo antes. Unos segundos;
+> los datos no se tocan.
 
 ### Qué trae cada versión
 
@@ -154,6 +168,8 @@ FibraOS habla con los equipos: qué pide por SNMP, qué por CLI, y por qué.
 
 > ⚠️ **Nunca regenera `.env`.** `SECRET_KEY` cifra las credenciales de las OLTs
 > guardadas: si cambiara, se perderían todas y habría que volver a introducirlas.
+> Lo mismo con **`.env.traps`**: su `TRAPS_KEY` cifra las credenciales de avisos. No lo
+> borres; es obligatorio aunque no uses avisos (sin él `docker compose up` falla).
 
 | Flag / Variable | Para qué |
 |---|---|
@@ -283,13 +299,15 @@ la página: **la OLT ya estaba borrada**, era la lista lo que no se refrescaba.
 | El contenedor se llama como el host | Versión vieja del script (bug de la variable `HOSTNAME`). Ya está arreglado; re-corre el instalador o `pct set <CTID> --hostname FibraOS`. |
 | Docker no arranca en el CT | Necesita `nesting=1` (el script ya lo pone en el LXC que crea). |
 | El build se queda sin RAM | Sube `RAM_MB` (el build del frontend consume memoria). 4096 suele bastar. |
+| `env file /opt/fibraos/.env.traps not found` | Falta `.env.traps`. Lanza `update.sh` (lo crea, también si ya estás al día). |
+| `update.sh`: «Tu Docker Compose es la versión …» / «no puede cargar el docker-compose.prod.yml» | Compose demasiado viejo. Actualiza `docker-compose-plugin` dentro del CT y relanza; tu instalación no se ha tocado. |
 
 ---
 
 ## Notas
 
 - **Modelo:** un contenedor = un ISP (single-tenant). Cada CT genera sus propios
-  secretos (`SECRET_KEY` + password de DB) → no viaja ninguna credencial.
+  secretos (`SECRET_KEY` + password de DB + `.env.traps`) → no viaja ninguna credencial.
 - No es una publicación en el repo **oficial** de community-scripts (ese exige
   código público FOSS). Es un instalador propio, en su estilo, para desplegar
   FibraOS de forma rápida y repetible.

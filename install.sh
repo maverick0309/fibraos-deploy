@@ -308,6 +308,14 @@ SECRET="$(openssl rand -hex 32)"
 cp .env.prod.example .env
 sed -i "s|CAMBIA_ESTA_PASSWORD|${PGPASS}|g" .env
 sed -i "s|SECRET_KEY=.*|SECRET_KEY=${SECRET}|" .env
+# Secretos de los avisos (traps), aparte del .env: el receptor solo lee este fichero.
+# 🔴 Tiene que existir ANTES del `up`: docker-compose.prod.yml lo declara en forma corta
+# (la que entiende cualquier Compose v2) y sin él el arranque falla. Aunque el perfil
+# «avisos» no se use, la API lo lee.
+( umask 077
+  printf 'TRAPS_KEY=%s\nTRAPS_DB_PASSWORD=%s\n' "$(openssl rand -hex 32)" \
+    "$(openssl rand -hex 24)" > .env.traps )
+[[ -s .env.traps ]] || { echo "[CT] No se pudo crear .env.traps"; exit 1; }
 
 echo "[CT] Levantando el stack (docker compose build)…"
 docker compose -f docker-compose.prod.yml up -d --build
