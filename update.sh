@@ -74,10 +74,17 @@ NEW_DIR=""; OLD_DIR=""; SWAPPED=0; BACKUP_DIR=""; REV_ANTES=""; NOVEDADES_TMP=""
 PG_USER="fibraos"; PG_DB="fibraos"
 
 # Espera a /api/health. $1 = intentos de 3 s (def 60 = 3 min). 0 si respondió.
+# Se pregunta DENTRO del contenedor web (su nginx → la API), no a localhost:80 del
+# servidor: con FIBRAOS_WEB_PUBLICAR el nginx puede no estar en el 80, y en el 80 puede
+# haber un Caddy que contesta aunque la API esté caída (se daría por buena una
+# actualización rota) o nadie (se esperaría y se desharía una buena). Llamar desde
+# $APP_DIR: compose saca el proyecto del directorio. `curl -f` / `wget` fallan con HTTP
+# >= 400, igual que antes; wget por si una imagen anterior (vuelta atrás) no trae curl.
+_SONDA_SALUD='if command -v curl >/dev/null 2>&1; then curl -sf --max-time 5 -o /dev/null http://127.0.0.1/api/health; else wget -q -T 5 -O /dev/null http://127.0.0.1/api/health; fi'
 _esperar_api() {
   local _i
   for _i in $(seq 1 "${1:-60}"); do
-    curl -sf http://localhost/api/health >/dev/null 2>&1 && return 0
+    docker compose -f "$COMPOSE_FILE" exec -T web sh -c "$_SONDA_SALUD" >/dev/null 2>&1 && return 0
     sleep 3
   done
   return 1
@@ -223,8 +230,18 @@ _hex() { head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 
 _valor_de() {   # $1 = fichero, $2 = variable → su valor (la última aparición, como Compose)
   [[ -f "$1" ]] || return 0
-  sed -n -E "s/^[[:space:]]*(export[[:space:]]+)?${2}[[:space:]]*=//p" "$1" \
-    | tail -1 | tr -d '"'"'"' \r\t'
+  local v
+  v="$(sed -n -E "s/^[[:space:]]*(export[[:space:]]+)?${2}[[:space:]]*=//p" "$1" | tail -1)"
+  v="${v//$'\r'/}"
+  v="${v#"${v%%[![:space:]]*}"}"
+  # Como Compose: entre comillas vale lo de dentro; sin comillas, « #…» es un comentario
+  # (`FIBRAOS_WEB_PUBLICAR=127.0.0.1:8080 # caddy`). Un # pegado al valor es del valor.
+  case "$v" in
+    \"*) v="${v#\"}"; v="${v%%\"*}" ;;
+    \'*) v="${v#\'}"; v="${v%%\'*}" ;;
+    *)   v="$(printf '%s' "$v" | sed -E 's/[[:space:]]+#.*$//')" ;;
+  esac
+  printf '%s' "$v" | tr -d '"'"'"' \r\t'
 }
 
 _env_traps_faltan() {   # $1 = directorio → variables que faltan o están vacías
@@ -355,6 +372,25 @@ _avisar_reinicio_bd() {
   msg_info "avisos): unos segundos sin servicio. Los datos no se tocan."
 }
 # ── fin de las funciones de avisos ───────────────────────────────────────────
+
+# FIBRAOS_WEB_PUBLICAR (opcional): dónde publica Docker el nginx. «80» (el de siempre) o
+# «127.0.0.1:8080» con un proxy en este mismo servidor. 0 si vale o no está; si no, lo
+# dice y 1. Llamar desde el directorio cuyo .env se va a usar. Falla CERRADO: un valor
+# mal escrito no se cambia por «80», que publicaría en todas las interfaces justo lo que
+# el ISP quería cerrar (y con un Caddy en el 80 tumbaría el `up` y la vuelta atrás).
+_publicacion_web_valida() {
+  local web p
+  web="$(_valor_env FIBRAOS_WEB_PUBLICAR)"
+  [[ -n "$web" ]] || return 0
+  p="${web##*:}"
+  if [[ "$web" =~ ^([0-9]{1,5}|([0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{1,5}|\[[0-9A-Fa-f:]+\]:[0-9]{1,5})$ ]] \
+     && (( 10#$p >= 1 && 10#$p <= 65535 )); then
+    return 0
+  fi
+  msg_err "FIBRAOS_WEB_PUBLICAR=«${web}» no es válido. Tiene que ser un puerto (80) o"
+  msg_err "IP:puerto (127.0.0.1:8080). Corrígelo en $APP_DIR/.env y vuelve a lanzar esto."
+  return 1
+}
 
 line
 echo -e " ${GN}FibraOS — Actualizador${CL}  (no instala: solo actualiza)"
@@ -524,6 +560,10 @@ if [[ "$CUR_VER" == "$NEW_SHORT" ]]; then
   # perfil); la base y los datos no se tocan.
   if [[ -n "$ENV_TRAPS_ANADIDAS" && "$DRY_RUN" -ne 1 ]]; then
     cd "$APP_DIR"
+    if ! _publicacion_web_valida; then
+      msg_err "No se recrea nada: FibraOS sigue como estaba."
+      trap - ERR; exit 1
+    fi
     msg_info "Se recrea la API para que lea lo añadido a .env.traps (sin reconstruir nada)…"
     _preparar_perfil_avisos
     _avisar_reinicio_bd
@@ -635,6 +675,15 @@ cp "$APP_DIR/.env" "$NEW_DIR/.env"
 cp -p "$APP_DIR/.env.traps" "$NEW_DIR/.env.traps"
 echo "$NEW_SHORT" > "$NEW_DIR/.fibraos-version"
 msg_ok ".env y .env.traps conservados (misma SECRET_KEY y TRAPS_KEY → credenciales intactas)"
+
+# ── 5a. Dónde se publica el nginx (FIBRAOS_WEB_PUBLICAR, opcional) ──────────
+# «80» (todas las interfaces, el de siempre) o «127.0.0.1:8080» con un proxy en este
+# mismo servidor. Mal escrito, `docker compose config` fallaría justo abajo culpando a
+# tu Compose. Se para AQUÍ, antes del intercambio: la instalación sigue intacta.
+if ! (cd "$NEW_DIR" && _publicacion_web_valida); then
+  msg_err "Tu instalación NO se ha tocado: sigue funcionando la versión que tenías."
+  cleanup_on_err 1
+fi
 
 # ── 5b. ¿Tu Docker Compose entiende la versión nueva? ────────────────────────
 # ANTES del intercambio: si no, el `up` fallaría con la versión nueva ya puesta. Esto es
