@@ -375,4 +375,10 @@ echo -e "  ${BL}LXC config:${CL}   /etc/pve/lxc/${CTID}.conf"
 echo
 echo -e "  ${YW}Nota:${CL} para datos reales el contenedor debe alcanzar las OLTs/MikroTik"
 echo -e "        del ISP (LAN directa o WireGuard). Para probar la UI no hace falta."
+echo
+echo -e "  ${YW}Primer acceso:${CL} los administradores deben usar segundo factor. Al entrar"
+echo -e "        por primera vez, FibraOS pedirá configurar una app de autenticación"
+echo -e "        (Google Authenticator, Aegis…) y dará 10 códigos de respaldo: guárdalos."
+echo -e "  ${YW}Reloj:${CL} los códigos dependen de la hora. En un LXC la pone este host:"
+echo -e "        sincronízalo por NTP (${BL}timedatectl${CL} → «System clock synchronized: yes»)."
 line
