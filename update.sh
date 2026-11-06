@@ -172,6 +172,58 @@ _volver_al_codigo_anterior() {
   fi
 }
 
+# ── Registro de la API al fallar ─────────────────────────────────────────────
+# La vuelta atrás RECREA el contenedor api, y con él se va el registro que explicaba el
+# fallo (p. ej. la migración que no consiguió el bloqueo): el ISP solo veía «La
+# actualización falló (exit 1)». Por eso, ANTES de volver atrás, se imprimen las últimas
+# líneas y se guardan junto al backup de esta actualización (600, como el resto).
+# Llamar desde $APP_DIR (compose saca el proyecto del directorio). Nunca falla: si no hay
+# registro, se sigue con la vuelta atrás igual.
+#
+# 🔴 Ese registro puede llevar secretos: un DATABASE_URL con contraseña en una excepción,
+# los `[parameters: …]` que SQLAlchemy mete en sus errores (hashes, credenciales cifradas
+# de equipos, semillas de 2FA), el eco de SQL con DEBUG, o un `?token=` en el acceso.
+# Se TAPA el valor (no la línea, que es la que explica el fallo). Si el filtro falla, no
+# se enseña nada: mejor sin registro que con la contraseña de la base en la terminal.
+_filtrar_secretos() {
+  sed -E \
+    -e 's#([A-Za-z][A-Za-z0-9+.-]*://[^:/@[:space:]]+):[^[:space:]]+@#\1:***@#g' \
+    -e 's#(\[parameters: ).*#\1***]#' \
+    -e 's#(sqlalchemy\.engine[^[]*\[[^]]*\]) .*#\1 ***#' \
+    -e 's#([Bb]earer|[Bb]asic)[[:space:]]+[A-Za-z0-9._~+/=-]+#\1 ***#g' \
+    -e 's#((password|passwd|pwd|secret|token|database[_-]?url|dsn|api[_-]?key|private[_-]?key|traps[_-]?key|authorization|community|totp|otp)[A-Za-z0-9_]*["'"'"']?[[:space:]]*[=:][[:space:]]*)["'"'"']?[^[:space:],;&"'"'"')]+#\1***#Ig'
+}
+
+_guardar_log_api() {
+  local log_crudo="" log="" fichero="" con_tope=()
+  command -v timeout >/dev/null 2>&1 && con_tope=(timeout 30)
+  log_crudo="$(${con_tope[@]+"${con_tope[@]}"} docker compose -f "$COMPOSE_FILE" logs --no-color --tail 60 api 2>/dev/null)" \
+    || log_crudo=""
+  if [[ -z "$log_crudo" ]]; then
+    msg_err "No pude leer el registro de la API (el contenedor no llegó a existir o Docker no respondió)."
+    return 0
+  fi
+  log="$(printf '%s\n' "$log_crudo" | _filtrar_secretos)" || log=""
+  if [[ -z "$log" ]]; then
+    msg_err "No pude filtrar las contraseñas del registro de la API: no lo enseño. Míralo con:"
+    msg_err "   cd $APP_DIR && docker compose -f $COMPOSE_FILE logs --tail 100 api"
+    return 0
+  fi
+  echo
+  msg_err "Últimas líneas del registro de la API (por qué no arrancó):"
+  printf '%s\n' "$log" | sed 's/^/     /' >&2
+  echo
+  if [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR" ]]; then
+    fichero="$BACKUP_DIR/api-log-fallo.txt"
+    if ( umask 077 && printf '%s\n' "$log" > "$fichero" ) 2>/dev/null; then
+      chmod 600 "$fichero" 2>/dev/null
+      msg_info "Registro guardado en $fichero  (mándanos ese fichero si nos pides ayuda)"
+    fi
+  fi
+  return 0
+}
+# ── fin del registro de la API
+
 # Se llama por la trampa ERR (un comando falló) y A MANO desde los fallos que salen con
 # `exit`: un `exit 1` NO dispara la trampa ERR, y por eso la espera de /api/health fallida
 # no volvía nunca atrás aunque el comentario dijera lo contrario.
@@ -183,7 +235,10 @@ cleanup_on_err() {
   msg_err "La actualización falló (exit $code)."
   if [[ "$SWAPPED" -eq 1 && -d "$OLD_DIR" ]]; then
     local rev_ahora=""
-    cd "$APP_DIR" 2>/dev/null && rev_ahora="$(_revision_bd)"
+    if cd "$APP_DIR" 2>/dev/null; then
+      _guardar_log_api   # antes de recrear nada: la vuelta atrás borra este registro
+      rev_ahora="$(_revision_bd)"
+    fi
     if [[ -n "$REV_ANTES" && -n "$rev_ahora" && "$rev_ahora" != "$REV_ANTES" ]]; then
       _se_queda_la_nueva "$rev_ahora"
     else
@@ -570,8 +625,9 @@ if [[ "$CUR_VER" == "$NEW_SHORT" ]]; then
     if docker compose -f "$COMPOSE_FILE" up -d && _esperar_api; then
       msg_ok "API respondiendo con la configuración de avisos cargada."
     else
-      msg_err "La API no responde tras recrearla. El código no ha cambiado; mira por qué con:"
-      msg_err "   cd $APP_DIR && docker compose -f $COMPOSE_FILE logs --tail 100 api"
+      msg_err "La API no responde tras recrearla. El código no ha cambiado."
+      _guardar_log_api
+      msg_err "Registro completo:  cd $APP_DIR && docker compose -f $COMPOSE_FILE logs --tail 100 api"
       trap - ERR; exit 1
     fi
   fi
