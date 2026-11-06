@@ -595,8 +595,14 @@ fi
 if [[ "$DO_BACKUP" -eq 1 ]]; then
   BACKUP_DIR="${BACKUP_ROOT}/$(date +%Y-%m-%d_%H%M%S)"
   mkdir -p "$BACKUP_DIR"
+  # 🔴 Aquí van el .env (SECRET_KEY, contraseña de la base) y el volcado entero de la base:
+  # solo para el dueño. Con la umask por defecto quedaban legibles por cualquier usuario.
+  chmod 700 "$BACKUP_DIR"
   msg_info "Backup en $BACKUP_DIR …"
-  cp "$APP_DIR/.env" "$BACKUP_DIR/.env"
+  # Instalaciones de antes de 2026-11-04 crearon el .env con 644: se cierra a «otros» una
+  # vez (sin quitar el grupo, por si el ISP lanza Compose con un usuario de ese grupo).
+  chmod o-rwx "$APP_DIR/.env"
+  cp -p "$APP_DIR/.env" "$BACKUP_DIR/.env"
   cp -p "$APP_DIR/.env.traps" "$BACKUP_DIR/.env.traps"
   if ( cd "$APP_DIR" && docker compose -f "$COMPOSE_FILE" exec -T db \
          pg_dump -U "$PG_USER" "$PG_DB" 2>/dev/null ) | gzip > "$BACKUP_DIR/db.sql.gz"; then
@@ -668,7 +674,8 @@ _extraer_novedades "$APP_DIR/CHANGELOG.md" "$NEW_DIR/CHANGELOG.md" > "$NOVEDADES
 
 # ── 5. Conservar configuración y datos locales ───────────────────────────────
 # .env es lo único imprescindible (SECRET_KEY + password BD). Nunca se regenera.
-cp "$APP_DIR/.env" "$NEW_DIR/.env"
+cp -p "$APP_DIR/.env" "$NEW_DIR/.env"
+chmod o-rwx "$NEW_DIR/.env"   # con o sin backup (--no-backup), nunca legible por «otros»
 # 🔴 .env.traps viaja igual que el .env: su TRAPS_KEY cifra las credenciales de avisos, y
 # perderla las dejaría ilegibles (habría que regenerarlas y reconfigurar cada OLT). Ya
 # existe seguro (paso 2b); si no se pudiera copiar, se para aquí, antes del intercambio.

@@ -306,6 +306,9 @@ echo "[CT] Generando .env…"
 PGPASS="$(openssl rand -hex 16)"
 SECRET="$(openssl rand -hex 32)"
 cp .env.prod.example .env
+# 🔴 El .env lleva SECRET_KEY y la contraseña de la base: solo lo lee root (Compose).
+# `cp` hereda los permisos del ejemplo (644), y así lo leía cualquier usuario del CT.
+chmod 600 .env
 sed -i "s|CAMBIA_ESTA_PASSWORD|${PGPASS}|g" .env
 sed -i "s|SECRET_KEY=.*|SECRET_KEY=${SECRET}|" .env
 # Secretos de los avisos (traps), aparte del .env: el receptor solo lee este fichero.
