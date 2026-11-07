@@ -415,16 +415,47 @@ _preparar_perfil_avisos() {
   return 0
 }
 
-# La primera actualización con el receptor mete la base en su red (`traps_net`), y Docker
-# tiene que recrear ese contenedor. Se dice antes, para que nadie se asuste.
+# Tamaño de `/dev/shm` que declara el servicio `db` del compose, en bytes; nada si no lo
+# declara o no se entiende. Unidades de Docker: b, k, m, g (base 1024), con «b» opcional.
+_shm_declarado_bytes() {
+  local v n u
+  v="$(awk '/^  db:/{d=1; next} d && /^  [^ #]/{d=0} d && /^ +shm_size:/{print $2; exit}' \
+         "$COMPOSE_FILE" 2>/dev/null)" || v=""
+  v="${v//[\"\']/}"; v="${v,,}"
+  [[ "$v" =~ ^([0-9]+)([kmg]?)b?$ ]] || return 0
+  n="${BASH_REMATCH[1]}"; u="${BASH_REMATCH[2]}"
+  case "$u" in
+    k) n=$((n * 1024)) ;;
+    m) n=$((n * 1024 * 1024)) ;;
+    g) n=$((n * 1024 * 1024 * 1024)) ;;
+  esac
+  echo "$n"
+}
+
+# Hay cambios del compose que obligan a Docker a recrear el contenedor de la base: la
+# primera vez que entra en la red del receptor (`traps_net`) y la primera vez que recibe
+# su `/dev/shm` propio. Se dice antes, UNA vez aunque coincidan, para que nadie se asuste.
+# Si el contenedor no existe todavía, no hay nada que reiniciar y no se avisa.
 _avisar_reinicio_bd() {
-  local redes=""
-  grep -q 'traps_net' "$COMPOSE_FILE" 2>/dev/null || return 0
-  redes="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' \
-             fibraos-db 2>/dev/null)" || return 0
-  [[ -z "$redes" || "$redes" == *traps_net* ]] && return 0
-  msg_info "Esta vez se reinicia UNA vez la base de datos (entra en la red del receptor de"
-  msg_info "avisos): unos segundos sin servicio. Los datos no se tocan."
+  local redes="" shm_actual="" shm_quiere="" motivos=()
+  docker inspect fibraos-db >/dev/null 2>&1 || return 0
+  if grep -q 'traps_net' "$COMPOSE_FILE" 2>/dev/null; then
+    redes="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' \
+               fibraos-db 2>/dev/null)" || redes=""
+    [[ -n "$redes" && "$redes" != *traps_net* ]] && motivos+=("entra en la red del receptor de avisos")
+  fi
+  shm_quiere="$(_shm_declarado_bytes)"
+  if [[ -n "$shm_quiere" ]]; then
+    shm_actual="$(docker inspect -f '{{.HostConfig.ShmSize}}' fibraos-db 2>/dev/null)" || shm_actual=""
+    [[ -n "$shm_actual" && "$shm_actual" != "$shm_quiere" ]] \
+      && motivos+=("recibe más memoria de trabajo y más margen para pararse ordenadamente")
+  fi
+  [[ ${#motivos[@]} -eq 0 ]] && return 0
+  local por="${motivos[0]}"
+  [[ ${#motivos[@]} -gt 1 ]] && por="${motivos[0]} y ${motivos[1]}"
+  msg_info "Esta vez se reinicia UNA vez la base de datos (${por})."
+  msg_info "Notarás el panel sin responder unos segundos (en una base grande, hasta un par de"
+  msg_info "minutos, el tiempo de cerrarla bien). No se pierde ningún dato y no tienes que hacer nada."
 }
 # ── fin de las funciones de avisos ───────────────────────────────────────────
 
